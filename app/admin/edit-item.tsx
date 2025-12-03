@@ -1,16 +1,7 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import React, { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Modal,
-    Pressable,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 import { supabase } from "../lib/supabase";
 
@@ -32,7 +23,7 @@ export default function AdminInventory() {
   const [confirmAction, setConfirmAction] = useState<"save" | "delete" | null>(null);
   const [selectedRow, setSelectedRow] = useState<Partial<Item> | null>(null);
   const [processing, setProcessing] = useState(false);
-
+  //Database selection
   const fetchItems = async () => {
     setLoading(true);
     try {
@@ -255,8 +246,6 @@ export default function AdminInventory() {
         <Text style={styles.hcell}>Marked Price </Text>
         <Text style={styles.hcell}>Selling Price</Text>
         <Text style={styles.hcell}>Quantity</Text>
-        <Text style={styles.hcell}></Text>
-        <Text style={styles.hcell}></Text>
       </View>
 
       {loading ? (

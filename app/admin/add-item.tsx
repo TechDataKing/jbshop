@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Alert, Button, StyleSheet, Text, TextInput, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import { Alert, Button, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { supabase } from "../lib/supabase";
 
 export default function AddItem() {
@@ -10,13 +10,63 @@ export default function AddItem() {
   const [qty, setQty] = useState("");
   const [unit, setUnit] = useState("");
 
+  type Item = {
+    id: number;
+    name: string;
+    alias?: string;
+    mp: number;
+    sp: number;
+    quantity: number;
+    unit: string;
+  };
+
+  const [suggestions, setSuggestions] = useState<Item[]>([]);
+
+  // 🔴 FIXED: clearForm must be here (NOT inside saveItem)
+  const clearForm = () => {
+    setName("");
+    setAlias("");
+    setMp("");
+    setSp("");
+    setQty("");
+    setUnit("");
+    setSuggestions([]);
+  };
+
+  // 🔎 LIVE SEARCH
+  useEffect(() => {
+    const search = async () => {
+      const query = name.trim().toLowerCase() || alias.trim().toLowerCase();
+      if (query.length < 2) return setSuggestions([]);
+
+      const { data, error } = await supabase
+        .from("items")
+        .select("id, name, mp, sp, quantity, unit")
+        .or(`name.ilike.%${query}%,alias.ilike.%${query}%`)
+        .limit(5);
+
+      if (!error) setSuggestions(data || []);
+    };
+
+    search();
+  }, [name, alias]);
+
+  const fillItem = (item: Item) => {
+    setName(item.name);
+    setAlias(item.alias || "");
+    setMp(item.mp.toString());
+    setSp(item.sp.toString());
+    setQty(item.quantity.toString());
+    setUnit(item.unit || "");
+    setSuggestions([]);
+  };
+
   const saveItem = async () => {
     if (!name || !mp || !sp || !qty || !unit)
       return Alert.alert("Missing fields");
 
     const q = parseFloat(qty);
 
-    // Check if item already exists
     const { data: existing, error: selectError } = await supabase
       .from("items")
       .select("*")
@@ -28,7 +78,6 @@ export default function AddItem() {
     }
 
     if (existing) {
-      // Update quantity
       const { error: updateError } = await supabase
         .from("items")
         .update({ quantity: existing.quantity + q })
@@ -38,30 +87,23 @@ export default function AddItem() {
 
       Alert.alert("✔ Updated quantity!");
     } else {
-      // Insert new item
-      const { error: insertError } = await supabase
-        .from("items")
-        .insert([
-          {
-            name: name.trim().toLowerCase(),
-            mp: parseFloat(mp),
-            sp: parseFloat(sp),
-            quantity: q,
-            unit,
-          },
-        ]);
+      const { error: insertError } = await supabase.from("items").insert([
+        {
+          name: name.trim().toLowerCase(),
+          alias: alias.trim().toLowerCase(),
+          mp: parseFloat(mp),
+          sp: parseFloat(sp),
+          quantity: q,
+          unit,
+        },
+      ]);
 
       if (insertError) return Alert.alert(insertError.message);
 
       Alert.alert("✔ Item added!");
     }
 
-    // Clear form after save
-    setName("");
-    setMp("");
-    setSp("");
-    setQty("");
-    setUnit("");
+    clearForm(); // ⭐ Works now
   };
 
   return (
@@ -74,13 +116,30 @@ export default function AddItem() {
         value={name}
         onChangeText={setName}
       />
-      <TextInput
-    placeholder="Alias"
-    style={styles.input}
-    value={alias}
-    onChangeText={setAlias}
-/>
 
+      <TextInput
+        placeholder="Alias"
+        style={styles.input}
+        value={alias}
+        onChangeText={setAlias}
+      />
+
+      {suggestions.length > 0 && (
+        <View style={styles.suggestBox}>
+          {suggestions.map((item) => (
+            <TouchableOpacity
+              key={item.id}
+              onPress={() => fillItem(item)}
+              style={styles.suggestItem}
+            >
+              <Text style={{ fontWeight: "700" }}>{item.name}</Text>
+              <Text style={{ color: "#555" }}>
+                MP: {item.mp} | SP: {item.sp}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
 
       <TextInput
         placeholder="Market price"
@@ -110,8 +169,11 @@ export default function AddItem() {
         placeholder="Unit (kg, pcs, litre)"
         style={styles.input}
         value={unit}
-        onChangeText={setUnit}
       />
+
+      <View style={{ marginBottom: 10 }}>
+        <Button title="Clear Form" color="red" onPress={clearForm} />
+      </View>
 
       <Button title="Save Item" onPress={saveItem} />
     </View>
@@ -136,5 +198,17 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 8,
     borderColor: "#ccc",
+  },
+  suggestBox: {
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  suggestItem: {
+    padding: 10,
+    borderBottomWidth: 1,
+    borderColor: "#eee",
   },
 });

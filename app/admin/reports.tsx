@@ -1,4 +1,3 @@
-// app/admin/report.tsx
 import DateTimePicker from "@react-native-community/datetimepicker";
 import React, { useEffect, useState } from "react";
 import {
@@ -97,7 +96,7 @@ export default function Report() {
   );
 
   return (
-    <ScrollView contentContainerStyle={{ padding: 20, gap: 20 }}>
+    <ScrollView contentContainerStyle={{ padding: 20, gap: 20, marginTop: 10 }}>
 
       {/* FILTER BUTTONS */}
       <View
@@ -234,7 +233,8 @@ export default function Report() {
         ))}
       </View>
 
-      <View style={{ gap: 10 }}>
+      {/* Running Low - Table-like Format */}
+      <View style={{ gap: 10, marginTop: 20 }}>
         <Text
           style={{
             fontSize: 18,
@@ -245,12 +245,30 @@ export default function Report() {
           Running Low
         </Text>
 
+        {/* Table-like Header */}
+        <View style={{ flexDirection: "row", justifyContent: "space-between", paddingBottom: 5 }}>
+          <Text style={{ fontWeight: "bold", width: "40%" }}>Name</Text>
+          <Text style={{ fontWeight: "bold", width: "25%",marginLeft:-30 }}>In Stock</Text>
+          <Text style={{ fontWeight: "bold", width: "25%" }}>Deficit</Text>
+        </View>
+
+        {/* Table Content */}
         {lowStock.map((i, idx) => (
-          <Text key={idx}>
-            {i.name} ({i.quantity})
-          </Text>
+          <View
+            key={idx}
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              paddingBottom: 5,
+            }}
+          >
+            <Text style={{ width: "40%" }}>{i.name}</Text>
+            <Text style={{ width: "25%" }}>{i.quantity}</Text>
+            <Text style={{ width: "25%" }}>{i.target - i.quantity}</Text>
+          </View>
         ))}
       </View>
+
     </ScrollView>
   );
 }

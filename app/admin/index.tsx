@@ -1,23 +1,35 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import React, { useEffect, useState } from "react";
 import {
-    FlatList,
-    Modal,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert, Dimensions, FlatList, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 import { getIcon } from "../../utils/iconMap";
 import { supabase } from "../lib/supabase";
+
+const screenWidth = Dimensions.get("window").width;
+const COLUMN_WIDTH = 110; // adjust tile width
+const numCols = Math.floor(screenWidth / COLUMN_WIDTH);
+
+const confirmAsync = (title: string, message: string): Promise<boolean> => {
+  return new Promise((resolve) => {
+    Alert.alert(
+      title,
+      message,
+      [
+        { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+        { text: "OK", onPress: () => resolve(true) },
+      ],
+      { cancelable: false }
+    );
+  });
+};
 
 type Item = {
   id: number;
   name: string;
   mp: number;
   sp: number;
-  qty: number;
+  quantity: number;
 };
 
 type CartItem = {
@@ -47,6 +59,12 @@ export default function AdminSell() {
   }, []);
 
   const openItem = (item: Item) => {
+    // 🚫 FIX 1: BLOCK OPENING MODAL WHEN OUT OF STOCK
+    if (item.quantity <= 0) {
+      alert(`${item.name} is out of stock!`);
+      return;
+    }
+
     setSelected(item);
     setSellPrice(item.sp.toString());
     setQty("");
@@ -58,7 +76,16 @@ export default function AdminSell() {
 
     const q = parseFloat(qty);
     const price = parseFloat(sellPrice);
+
     if (!q || !price) return alert("Missing values!");
+
+    // 🚫 FIX 2: BLOCK ZERO OR NEGATIVE QUANTITY
+    if (q <= 0) return alert("Quantity must be greater than 0");
+
+    // 🚫 FIX 3: CANNOT ADD MORE THAN STOCK
+    if (q > selected.quantity) {
+      return alert(`${selected.name} has only ${selected.quantity} left in stock.`);
+    }
 
     const newItem: CartItem = {
       id: selected.id,
@@ -72,91 +99,153 @@ export default function AdminSell() {
     setModalVisible(false);
   };
 
-  // ✔ Checkout AND remove stock (fixed to not rely on setCart timing)
+  // ✔ Checkout AND remove stock
   const checkout = async () => {
-  try {
-    let itemsToProcess: CartItem[] = [...cart];
+    try {
+      let itemsToProcess: CartItem[] = [...cart];
 
-    if (itemsToProcess.length === 0 && selected && qty && sellPrice) {
-      const q = parseFloat(qty);
-      const price = parseFloat(sellPrice);
-      if (!q || !price) {
-        return alert("Enter valid quantity and price before checkout.");
+      if (itemsToProcess.length === 0 && selected && qty && sellPrice) {
+        const q = parseFloat(qty);
+        const price = parseFloat(sellPrice);
+        if (!q || !price) {
+          return alert("Enter valid quantity and price before checkout.");
+        }
+
+        // BLOCK invalid quantities
+        if (q <= 0) return alert("Quantity must be greater than 0");
+        if (q > selected.quantity)
+          return alert(`${selected.name} has only ${selected.quantity} left in stock.`);
+
+        // LOSS WARNING
+        if (!selected) return;   // <-- Fix TS error
+
+if (price < selected.mp) {
+  const ok = await confirmAsync(
+    "Selling At Loss!",
+    `MP: ${selected.mp}\nSP: ${price}\n\nSell anyway?`
+  );
+  if (!ok) return;
+}
+
+
+        const newItem: CartItem = {
+          id: selected.id,
+          name: selected.name,
+          qty: q,
+          price,
+          subtotal: q * price,
+        };
+        itemsToProcess.push(newItem);
       }
 
-      // 🔥 LOSS WARNING HERE
-      if (price < selected.mp) {
-        const ok = confirm(
-          `Warning: Selling below MP!\nMP: ${selected.mp}\nSP: ${price}\n\nSell anyway?`
-        );
-        if (!ok) return; // cancel checkout
+      if (itemsToProcess.length === 0) {
+        return alert("Cart empty!");
       }
 
-      const newItem: CartItem = {
-        id: selected.id,
-        name: selected.name,
-        qty: q,
-        price,
-        subtotal: q * price,
-      };
-      itemsToProcess.push(newItem);
-    }
+      // Loss check for all items
+      for (const ci of itemsToProcess) {
+        const mpVal = items.find((i) => i.id === ci.id)?.mp ?? null;
+        if (mpVal && ci.price < mpVal) {
+          const ok = await confirmAsync(
+  "Selling At Loss!",
+  `Item: ${ci.name}\nMP: ${mpVal}\nSP: ${ci.price}\n\nSell anyway?`
+);
+if (!ok) return;
 
-    if (itemsToProcess.length === 0) {
-      return alert("Cart empty!");
-    }
-
-    // 🧠 ALSO CHECK CART ITEMS FOR LOSS
-    for (const ci of itemsToProcess) {
-      const mpVal = items.find((i) => i.id === ci.id)?.mp ?? null;
-      if (mpVal && ci.price < mpVal) {
-        const ok = confirm(
-          `Warning: Selling ${ci.name} below cost!\nMP: ${mpVal}\nSP: ${ci.price}\n\nSell anyway?`
-        );
-        if (!ok) return;
-      }
-    }
-
-    // ------- your original code continues unchanged ------
-    for (const ci of itemsToProcess) {
-      const mpVal = items.find((i) => i.id === ci.id)?.mp ?? null;
-
-      const { error: saleError } = await supabase.from("sales").insert({
-        name: ci.name,
-        mp: mpVal,
-        sp: ci.price,
-        qty: ci.qty,
-        subtotal: ci.subtotal,
-      });
-
-      if (saleError) {
-        alert("Failed to record sale: " + saleError.message);
-        return;
+        }
       }
 
-      const { error: rpcError } = await supabase.rpc("decrease_qty", {
-        item_id: ci.id,
-        quantity: ci.qty,
-      });
+      //// 🧠 FIX 4: LIVE STOCK CHECK IN DB BEFORE PROCESSING SALE
+for (const ci of itemsToProcess) {
+  const { data: liveItem, error: fetchErr } = await supabase
+    .from("items")
+    .select("quantity")
+    .eq("id", ci.id)
+    .single();
+    const testFetch = await supabase.from("items").select("id, qty").limit(1);
+    console.log("=== TEST FETCH RESULT ===");
+    console.log("DATA:", testFetch.data);
+    console.log("ERROR:", testFetch.error);
 
-      if (rpcError) {
-        alert("Failed to update stock: " + rpcError.message);
-        return;
-      }
-    }
-
-    setCart([]);
-    setModalVisible(false);
-    setSelected(null);
-    setQty("");
-    setSellPrice("");
-    alert("Sold Successfully!");
-    fetchItems();
-  } catch (err: unknown) {
-    let message = "Unknown error";
-    if (err instanceof Error) message = err.message;
-    alert(`Checkout failed: ${message}`);
+  // 🟥 Database lookup failed OR item not found
+  if (fetchErr || !liveItem) {
+    
+    alert(
+      `Stock check failed for "${ci.name}".\n` +
+      `Reason: Could not fetch item data from database.`
+    );
+    return;
   }
+
+  // 🟥 Item exists but has zero or negative quantity
+  if (liveItem.quantity <= 0) {
+    alert(
+      `"${ci.name}" is out of stock.\n` +
+      `Available quantity: 0`
+    );
+    return;
+  }
+
+  // 🟥 Requested quantity is more than what is available
+  if (ci.qty > liveItem.quantity) {
+    alert(
+      `"${ci.name}" does not have enough stock.\n` +
+      `Available: ${liveItem.quantity}\n` +
+      `Requested: ${ci.qty}`
+    );
+    return;
+  }
+
+  // 🟩 Get mp value from local items list
+  const mpVal = items.find((i) => i.id === ci.id)?.mp ?? null;
+
+  // 🟥 Failed to insert sale into "sales" table
+  const { error: saleError } = await supabase.from("sales").insert({
+    name: ci.name,
+    mp: mpVal,
+    sp: ci.price,
+    qty: ci.qty,
+    subtotal: ci.subtotal,
+  });
+
+  if (saleError) {
+    alert(
+      `Could not record sale for "${ci.name}".\n` +
+      `Error: ${saleError.message}`
+    );
+    return;
+  }
+
+  // 🟥 Failed to reduce stock using RPC (decrease_qty)
+  const { error: rpcError } = await supabase.rpc("decrease_qty", {
+    item_id: ci.id,
+    quantity: ci.qty,
+  });
+
+  if (rpcError) {
+    alert(
+      `Stock update failed for "${ci.name}".\n` +
+      `Error: ${rpcError.message}`
+    );
+    return;
+  }
+}
+
+// 🟩 If the loop completes, everything succeeded
+setCart([]);
+setModalVisible(false);
+setSelected(null);
+setQty("");
+setSellPrice("");
+alert("Sold Successfully!");
+fetchItems();
+} catch (err: unknown) {
+  let message = "Unknown error";
+  if (err instanceof Error) message = err.message;
+
+  // 🟥 Any uncaught unexpected error
+  alert(`Checkout failed.\nReason: ${message}`);
+}
 };
 
 
@@ -174,8 +263,9 @@ export default function AdminSell() {
       <Text style={styles.name}>{item.name}</Text>
 
       <Text style={styles.prices}>
-        Sp {item.sp}   Mkt {item.mp}
-      </Text>
+  SP: {item.sp}{"\n"}MP: {item.mp}
+</Text>
+
     </TouchableOpacity>
   );
 
@@ -190,7 +280,7 @@ export default function AdminSell() {
 
       <FlatList
         data={filtered}
-        numColumns={4}
+        numColumns={numCols}
         keyExtractor={(item) => item.id.toString()}
         renderItem={renderItem}
       />
@@ -244,7 +334,7 @@ export default function AdminSell() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0B132B", // dark premium blue
+    backgroundColor: "#0B132B",
     paddingTop: 40,
     paddingHorizontal: 12,
   },
@@ -270,8 +360,6 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
-
-    // modern shadow
     shadowColor: "#000",
     shadowOpacity: 0.25,
     shadowRadius: 6,
@@ -279,18 +367,26 @@ const styles = StyleSheet.create({
   },
 
   name: {
-    fontWeight: "700",
-    marginTop: 10,
-    color: "#1a1a1a",
-    fontSize: 15,
-  },
+  fontWeight: "700",
+  marginTop: 10,
+  color: "#1a1a1a",
+  fontSize: 15,
+  textAlign: "center",       // ⭐ center text
+  flexWrap: "wrap",          // ⭐ allow 2 lines
+  width: "100%",
+},
+
 
   prices: {
-    fontSize: 13,
-    color: "#d63031", // premium red
-    fontWeight: "600",
-    marginTop: 5,
-  },
+  fontSize: 13,
+  color: "#d63031",
+  fontWeight: "600",
+  marginTop: 5,
+  textAlign: "center",
+  flexWrap: "wrap",
+  width: "100%",
+},
+
 
   modalWrap: {
     flex: 1,
@@ -305,7 +401,6 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: "#e5e5e5",
-
     shadowColor: "#000",
     shadowOpacity: 0.2,
     shadowRadius: 6,
@@ -331,14 +426,6 @@ const styles = StyleSheet.create({
     borderColor: "#e3e3e3",
   },
 
-  btn: {
-    backgroundColor: "#10ac84",
-    padding: 16,
-    marginTop: 18,
-    borderRadius: 14,
-    alignItems: "center",
-  },
-
   btnText: {
     color: "#ffffff",
     fontWeight: "700",
@@ -351,7 +438,6 @@ const styles = StyleSheet.create({
     alignSelf: "center",
   },
 
-  // ---- NEW STYLES for Add/Checkout row ----
   row: {
     flexDirection: "row",
     justifyContent: "space-between",

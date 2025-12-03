@@ -1,13 +1,13 @@
 // manage-stock.tsx
 import React, { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Modal,
-    ScrollView,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Modal,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { supabase } from "../lib/supabase";
 
@@ -126,72 +126,75 @@ export default function ManageStock() {
         />
       </View>
 
-      <ScrollView horizontal>
-        <ScrollView style={{ maxHeight: 520 }}>
-          <Header />
+      {/* REMOVED horizontal scroll */}
+      <ScrollView style={{ maxHeight: 520 }}>
+        <Header />
 
-          {getTabItems().map((item) => (
-            <View
-              key={item.id}
-              style={{
-                flexDirection: "row",
-                paddingVertical: 10,
-                borderBottomWidth: 1,
-              }}
-            >
-              <View style={{ width: 140 }}>
-                <Text>{item.name}</Text>
-              </View>
+        {getTabItems().map((item) => (
+          <View
+            key={item.id}
+            style={{
+              flexDirection: "row",
+              paddingVertical: 10,
+              borderBottomWidth: 1,
+            }}
+          >
+            {/* NAME */}
+            <View style={{ flex: 2 }}>
+              <Text>{item.name}</Text>
+            </View>
 
-              <View style={{ width: 140 }}>
-                <Text>{item.quantity}</Text>
-              </View>
+            {/* QUANTITY */}
+            <View style={{ flex: 1 , paddingLeft: 4 }}>
+              <Text>{item.quantity}</Text>
+            </View>
 
-              <View style={{ width: 140 }}>
-                {activeTab === "noTarget" ? (
-                  <TextInput
-                    keyboardType="numeric"
-                    value={
-                      selectedItem?.id === item.id
-                        ? editingTarget
-                        : item.target?.toString() || ""
-                    }
-                    onChangeText={(v) => {
-                      setSelectedItem(item);
-                      setEditingTarget(v);
-                    }}
-                    style={{
-                      borderWidth: 1,
-                      padding: 6,
-                      borderRadius: 6,
-                    }}
-                  />
-                ) : (
-                  <Text>{item.target ?? "-"}</Text>
-                )}
-              </View>
-
-              {activeTab === "noTarget" && (
-                <TouchableOpacity
-                  style={{
-                    width: 140,
-                    alignItems: "center",
-                    padding: 5,
-                  }}
-                  onPress={() => {
+            {/* TARGET */}
+            <View style={{ flex: 1 }}>
+              {activeTab === "noTarget" ? (
+                <TextInput
+                  keyboardType="numeric"
+                  value={
+                    selectedItem?.id === item.id
+                      ? editingTarget
+                      : item.target?.toString() || ""
+                  }
+                  onChangeText={(v) => {
                     setSelectedItem(item);
-                    setEditingTarget(
-                      editingTarget || item.target?.toString() || ""
-                    );
-                    setConfirmVisible(true);
+                    setEditingTarget(v);
                   }}
-                >
-                  <Text style={{ color: "green", fontSize: 18 }}>Save</Text>
-                </TouchableOpacity>
+                  style={{
+                    borderWidth: 1,
+                    padding: 6,
+                    borderRadius: 6,
+                  }}
+                />
+              ) : (
+                <Text>{item.target ?? "-"}</Text>
               )}
             </View>
-          ))}
-        </ScrollView>
+
+            {/* SAVE BUTTON (Only no target) */}
+            {activeTab === "noTarget" && (
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  alignItems: "center",
+                  padding: 5,
+                }}
+                onPress={() => {
+                  setSelectedItem(item);
+                  setEditingTarget(
+                    editingTarget || item.target?.toString() || ""
+                  );
+                  setConfirmVisible(true);
+                }}
+              >
+                <Text style={{ color: "green", fontSize: 18 }}>Save</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ))}
       </ScrollView>
 
       {/* CONFIRM MODAL */}
@@ -205,7 +208,7 @@ export default function ManageStock() {
           }}
         >
           <View
-            style={{ backgroundColor: "white", padding: 16, borderRadius: 10 }}
+            style={{ backgroundColor: "white", padding: 20, borderRadius: 12,width:"60%" }}
           >
             <Text style={{ fontWeight: "700", marginBottom: 10 }}>
               Save new target?
@@ -285,15 +288,7 @@ export default function ManageStock() {
   );
 }
 
-function TabButton({
-  title,
-  active,
-  onPress,
-}: {
-  title: string;
-  active: boolean;
-  onPress: () => void;
-}) {
+function TabButton({ title, active, onPress }: any) {
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -319,15 +314,16 @@ function Header() {
         paddingVertical: 10,
       }}
     >
-      <View style={{ width: 140 }}>
-        <Text style={{ fontWeight: "700" }}>Name</Text>
+      <View style={{ flex: 2 }}>
+        <Text style={{ fontWeight: "700", paddingLeft: 2 }}>Name</Text>
       </View>
-      <View style={{ width: 140 }}>
-        <Text style={{ fontWeight: "700" }}>Quantity</Text>
+      <View style={{ flex: 1 }}>
+        <Text style={{ fontWeight: "700", marginLeft:-50}}>Quantity</Text>
       </View>
-      <View style={{ width: 140 }}>
-        <Text style={{ fontWeight: "700" }}>Target</Text>
+      <View style={{ flex: 1 }}>
+        <Text style={{ fontWeight: "700",marginLeft:-50 }}>Target</Text>
       </View>
     </View>
   );
 }
+
