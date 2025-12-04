@@ -1,5 +1,6 @@
 import DateTimePicker from "@react-native-community/datetimepicker";
-import React, { useEffect, useState } from "react";
+import { useFocusEffect } from "expo-router";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   ScrollView,
@@ -7,22 +8,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { supabase } from "../lib/supabase";
 
-type Sale = {
-  name: string;
-  qty: number;
-  sp: number;
-  mp: number;
-  subtotal: number;
-  created_at: string;
-};
-
-type Item = {
-  name: string;
-  quantity: number;
-  target: number;
-};
+import { db, getItems, Item, Sale } from "../lib/db/database";
 
 export default function Report() {
   const [items, setItems] = useState<Item[]>([]);
@@ -44,42 +31,62 @@ export default function Report() {
   const formattedPicked =
     pickedDate?.toISOString().split("T")[0] ?? "";
 
-  const fetchItems = async () => {
-    const { data, error } = await supabase.from("items").select("*");
-    if (error) return Alert.alert("Error fetching items", error.message);
-    setItems(data as Item[]);
+  // ➤ FETCH ITEMS FROM LOCAL SQLITE DB
+  const fetchItemsLocal = async () => {
+    try {
+      const data = await getItems();
+      setItems(data);
+    } catch (error: any) {
+      Alert.alert("Error fetching items (local DB)", error.message);
+    }
   };
 
-  const fetchSales = async () => {
-    let query = supabase.from("sales").select("*");
+  // ➤ FETCH SALES FROM LOCAL SQLITE DB
+  const fetchSalesLocal = async () => {
+    try {
+      let sql = "SELECT * FROM sales WHERE created_at >= ?";
+      let params: any[] = [];
 
-    if (filter === "today") {
-      query = query.gte("created_at", today);
+      if (filter === "today") {
+        params = [today];
+      }
+
+      if (filter === "yesterday") {
+        sql = "SELECT * FROM sales WHERE created_at >= ? AND created_at <= ?";
+        params = [yesterday, today + " 23:59:59"];
+      }
+
+      if (filter === "date" && formattedPicked) {
+        sql =
+          "SELECT * FROM sales WHERE created_at >= ? AND created_at <= ?";
+        params = [
+          formattedPicked,
+          formattedPicked + " 23:59:59",
+        ];
+      }
+
+      const results = await db.getAllAsync(sql, params);
+      setSales(results as Sale[]);
+    } catch (error: any) {
+      Alert.alert("Error fetching sales (local DB)", error.message);
     }
-
-    if (filter === "yesterday") {
-      query = query
-        .gte("created_at", yesterday)
-        .lte("created_at", today);
-    }
-
-    if (filter === "date" && formattedPicked) {
-      query = query
-        .gte("created_at", formattedPicked)
-        .lte("created_at", formattedPicked + " 23:59:59");
-    }
-
-    const { data, error } = await query;
-    if (error) return Alert.alert("Error fetching sales", error.message);
-
-    setSales(data as Sale[]);
   };
 
-  useEffect(() => {
-    fetchItems();
-    fetchSales();
-  }, [filter, pickedDate]);
+  // Refresh when user changes Today / Yesterday / Date
+useEffect(() => {
+  fetchSalesLocal();
+}, [filter, pickedDate]);
 
+// Refresh when screen regains focus
+useFocusEffect(
+  useCallback(() => {
+    fetchItemsLocal();
+    fetchSalesLocal();
+  }, [])
+);
+
+
+  // ➤ CALCULATIONS
   const profit = sales.reduce(
     (sum, s) => sum + (s.sp - s.mp) * s.qty,
     0
@@ -91,13 +98,14 @@ export default function Report() {
   );
 
   const outOfStock = items.filter((i) => i.quantity === 0);
+
   const lowStock = items.filter(
-    (i) => i.quantity > 0 && i.quantity <= i.target
+    (i) => i.quantity > 0 && i.quantity <= (i.target ?? 0)
   );
 
   return (
     <ScrollView contentContainerStyle={{ padding: 20, gap: 20, marginTop: 10 }}>
-
+      
       {/* FILTER BUTTONS */}
       <View
         style={{
@@ -147,7 +155,7 @@ export default function Report() {
         />
       )}
 
-      {/* PROFIT */}
+      {/* PROFIT CARD */}
       <View
         style={{
           backgroundColor: "#D1FAE5",
@@ -169,7 +177,7 @@ export default function Report() {
         </Text>
       </View>
 
-      {/* SALES */}
+      {/* SALES CARD */}
       <View
         style={{
           backgroundColor: "#E0F2FE",
@@ -191,7 +199,7 @@ export default function Report() {
         </Text>
       </View>
 
-      {/* RECEIPTS */}
+      {/* RECEIPT LIST */}
       <View
         style={{
           backgroundColor: "#fff",
@@ -216,7 +224,7 @@ export default function Report() {
         ))}
       </View>
 
-      {/* STOCK */}
+      {/* OUT OF STOCK */}
       <View style={{ gap: 10 }}>
         <Text
           style={{
@@ -233,7 +241,7 @@ export default function Report() {
         ))}
       </View>
 
-      {/* Running Low - Table-like Format */}
+      {/* LOW STOCK TABLE */}
       <View style={{ gap: 10, marginTop: 20 }}>
         <Text
           style={{
@@ -245,14 +253,14 @@ export default function Report() {
           Running Low
         </Text>
 
-        {/* Table-like Header */}
+        {/* TABLE HEADER */}
         <View style={{ flexDirection: "row", justifyContent: "space-between", paddingBottom: 5 }}>
           <Text style={{ fontWeight: "bold", width: "40%" }}>Name</Text>
           <Text style={{ fontWeight: "bold", width: "25%",marginLeft:-30 }}>In Stock</Text>
           <Text style={{ fontWeight: "bold", width: "25%" }}>Deficit</Text>
         </View>
 
-        {/* Table Content */}
+        {/* TABLE ROWS */}
         {lowStock.map((i, idx) => (
           <View
             key={idx}
@@ -264,11 +272,10 @@ export default function Report() {
           >
             <Text style={{ width: "40%" }}>{i.name}</Text>
             <Text style={{ width: "25%" }}>{i.quantity}</Text>
-            <Text style={{ width: "25%" }}>{i.target - i.quantity}</Text>
+            <Text style={{ width: "25%" }}>{(i.target ?? 0) - i.quantity}</Text>
           </View>
         ))}
       </View>
-
     </ScrollView>
   );
 }

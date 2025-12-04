@@ -1,6 +1,25 @@
+// app/admin/add-item.tsx
+import { router } from "expo-router";
 import React, { useEffect, useState } from "react";
-import { Alert, Button, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { supabase } from "../lib/supabase";
+
+import {
+  Alert,
+  Button,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+
+import {
+  getItems,
+  saveItem as insertItem,
+  Item,
+  searchItems,
+  updateItem,
+} from "../lib/db/database";
+
 
 export default function AddItem() {
   const [name, setName] = useState("");
@@ -10,19 +29,9 @@ export default function AddItem() {
   const [qty, setQty] = useState("");
   const [unit, setUnit] = useState("");
 
-  type Item = {
-    id: number;
-    name: string;
-    alias?: string;
-    mp: number;
-    sp: number;
-    quantity: number;
-    unit: string;
-  };
-
   const [suggestions, setSuggestions] = useState<Item[]>([]);
 
-  // 🔴 FIXED: clearForm must be here (NOT inside saveItem)
+  // 🔴 CLEAR FORM
   const clearForm = () => {
     setName("");
     setAlias("");
@@ -33,24 +42,20 @@ export default function AddItem() {
     setSuggestions([]);
   };
 
-  // 🔎 LIVE SEARCH
+  // 🔎 OFFLINE SEARCH FROM SQLITE
   useEffect(() => {
     const search = async () => {
       const query = name.trim().toLowerCase() || alias.trim().toLowerCase();
       if (query.length < 2) return setSuggestions([]);
 
-      const { data, error } = await supabase
-        .from("items")
-        .select("id, name, mp, sp, quantity, unit")
-        .or(`name.ilike.%${query}%,alias.ilike.%${query}%`)
-        .limit(5);
-
-      if (!error) setSuggestions(data || []);
+      const results = await searchItems(query);
+      setSuggestions(results || []);
     };
 
     search();
   }, [name, alias]);
 
+  // 🔄 AUTO FILL WHEN SELECTED
   const fillItem = (item: Item) => {
     setName(item.name);
     setAlias(item.alias || "");
@@ -61,50 +66,64 @@ export default function AddItem() {
     setSuggestions([]);
   };
 
-  const saveItem = async () => {
-    if (!name || !mp || !sp || !qty || !unit)
-      return Alert.alert("Missing fields");
+  // 💾 SAVE / UPDATE OFFLINE
+const saveItem = async () => {
+  console.log("🔍 SAVE ITEM PRESS:", { name, alias, mp, sp, qty, unit });
 
-    const q = parseFloat(qty);
+  if (!name || !mp || !sp || !qty || !unit) {
+    console.log("❌ Missing fields");
+    return Alert.alert("Missing fields");
+  }
 
-    const { data: existing, error: selectError } = await supabase
-      .from("items")
-      .select("*")
-      .eq("name", name.trim().toLowerCase())
-      .single();
+  const q = parseFloat(qty);
+  const mpVal = parseFloat(mp);
+  const spVal = parseFloat(sp);
 
-    if (selectError && selectError.code !== "PGRST116") {
-      return Alert.alert(selectError.message);
-    }
+  const allItems = await getItems();
+  console.log("📦 ALL ITEMS IN DB:", allItems);
 
-    if (existing) {
-      const { error: updateError } = await supabase
-        .from("items")
-        .update({ quantity: existing.quantity + q })
-        .eq("id", existing.id);
+  const existing = allItems.find(
+    (i) => i.name.trim().toLowerCase() === name.trim().toLowerCase()
+  );
 
-      if (updateError) return Alert.alert(updateError.message);
+  if (existing) {
+    console.log("🔁 UPDATING EXISTING ITEM:", existing);
 
-      Alert.alert("✔ Updated quantity!");
-    } else {
-      const { error: insertError } = await supabase.from("items").insert([
-        {
-          name: name.trim().toLowerCase(),
-          alias: alias.trim().toLowerCase(),
-          mp: parseFloat(mp),
-          sp: parseFloat(sp),
-          quantity: q,
-          unit,
-        },
-      ]);
+    await updateItem({
+      id: existing.id,
+      name: existing.name,
+      alias,
+      mp: mpVal,
+      sp: spVal,
+      unit,
+      quantity: existing.quantity + q,
+    });
 
-      if (insertError) return Alert.alert(insertError.message);
+    console.log("✔ UPDATED SUCCESSFULLY");
+    Alert.alert("✔ Quantity updated (offline)");
 
-      Alert.alert("✔ Item added!");
-    }
+    clearForm();
+  router.back();
+  } else {
+    console.log("➕ INSERTING NEW ITEM");
 
-    clearForm(); // ⭐ Works now
-  };
+    await insertItem({
+      name: name.trim().toLowerCase(),
+      alias: alias.trim().toLowerCase(),
+      mp: mpVal,
+      sp: spVal,
+      unit,
+      quantity: q,
+    });
+
+    console.log("✔ INSERTED SUCCESSFULLY");
+    Alert.alert("✔ Item added (offline)");
+  }
+
+  clearForm();
+  router.back();
+};
+
 
   return (
     <View style={styles.page}>
@@ -115,6 +134,7 @@ export default function AddItem() {
         style={styles.input}
         value={name}
         onChangeText={setName}
+        placeholderTextColor="#888"
       />
 
       <TextInput
@@ -122,8 +142,10 @@ export default function AddItem() {
         style={styles.input}
         value={alias}
         onChangeText={setAlias}
+        placeholderTextColor="#888"
       />
 
+      {/* SUGGESTIONS */}
       {suggestions.length > 0 && (
         <View style={styles.suggestBox}>
           {suggestions.map((item) => (
@@ -147,6 +169,7 @@ export default function AddItem() {
         value={mp}
         onChangeText={setMp}
         keyboardType="decimal-pad"
+        placeholderTextColor="#888"
       />
 
       <TextInput
@@ -155,6 +178,7 @@ export default function AddItem() {
         value={sp}
         onChangeText={setSp}
         keyboardType="decimal-pad"
+        placeholderTextColor="#888"
       />
 
       <TextInput
@@ -163,12 +187,15 @@ export default function AddItem() {
         value={qty}
         onChangeText={setQty}
         keyboardType="decimal-pad"
+        placeholderTextColor="#888"
       />
 
       <TextInput
         placeholder="Unit (kg, pcs, litre)"
         style={styles.input}
         value={unit}
+        onChangeText={setUnit}
+        placeholderTextColor="#888"
       />
 
       <View style={{ marginBottom: 10 }}>
@@ -198,6 +225,7 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 8,
     borderColor: "#ccc",
+    color: "#000",
   },
   suggestBox: {
     backgroundColor: "#fff",

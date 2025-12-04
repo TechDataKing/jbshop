@@ -1,14 +1,25 @@
+// app/(admin)/index.tsx
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import React, { useEffect, useState } from "react";
 import {
   Alert, Dimensions, FlatList, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 import { getIcon } from "../../utils/iconMap";
-import { supabase } from "../lib/supabase";
+
+// local DB functions
+import {
+  addSale, getItemById, getItems, updateItemQty,
+} from "../lib/db/database";
+
+// auto sync
+import { autoSync } from "../lib/sync";
+
+import { useFocusEffect } from "expo-router";
+import { useCallback } from "react";
 
 const screenWidth = Dimensions.get("window").width;
 const COLUMN_WIDTH = 110; // adjust tile width
-const numCols = Math.floor(screenWidth / COLUMN_WIDTH);
+const numCols = Math.max(1, Math.floor(screenWidth / COLUMN_WIDTH));
 
 const confirmAsync = (title: string, message: string): Promise<boolean> => {
   return new Promise((resolve) => {
@@ -49,14 +60,40 @@ export default function AdminSell() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
 
-  const fetchItems = async () => {
-    const { data, error } = await supabase.from("items").select("*");
-    if (!error && data) setItems(data as Item[]);
-  };
+  // load local items
+  const fetchItemsLocal = async () => {
+  try {
+    const rows = await getItems();
+    console.log("DEBUG: Items from SQLite:", rows);
+    setItems(rows as Item[]);
+  } catch (e) {
+    console.error("fetchItemsLocal error", e);
+  }
+};
+
 
   useEffect(() => {
-    fetchItems();
+    fetchItemsLocal();
+
+    // run autoSync on start
+    autoSync();
+
+    // daily auto sync: every 24 hours
+    const DAY = 24 * 60 * 60 * 1000;
+    const timer = setInterval(() => {
+      autoSync();
+    }, DAY);
+
+    return () => clearInterval(timer);
   }, []);
+  useFocusEffect(
+  useCallback(() => {
+    console.log("Screen focused → refreshing items");
+    fetchItemsLocal();
+    return () => {};
+  }, [])
+);
+
 
   const openItem = (item: Item) => {
     // 🚫 FIX 1: BLOCK OPENING MODAL WHEN OUT OF STOCK
@@ -99,7 +136,7 @@ export default function AdminSell() {
     setModalVisible(false);
   };
 
-  // ✔ Checkout AND remove stock
+  // ✔ Checkout AND remove stock (offline)
   const checkout = async () => {
     try {
       let itemsToProcess: CartItem[] = [...cart];
@@ -117,16 +154,15 @@ export default function AdminSell() {
           return alert(`${selected.name} has only ${selected.quantity} left in stock.`);
 
         // LOSS WARNING
-        if (!selected) return;   // <-- Fix TS error
+        if (!selected) return; // defensive
 
-if (price < selected.mp) {
-  const ok = await confirmAsync(
-    "Selling At Loss!",
-    `MP: ${selected.mp}\nSP: ${price}\n\nSell anyway?`
-  );
-  if (!ok) return;
-}
-
+        if (price < selected.mp) {
+          const ok = await confirmAsync(
+            "Warning: Selling below MP!",
+            `MP: ${selected.mp}\nSP: ${price}\n\nSell anyway?`
+          );
+          if (!ok) return;
+        }
 
         const newItem: CartItem = {
           id: selected.id,
@@ -142,112 +178,63 @@ if (price < selected.mp) {
         return alert("Cart empty!");
       }
 
-      // Loss check for all items
+      // Loss check for all items (local list)
       for (const ci of itemsToProcess) {
         const mpVal = items.find((i) => i.id === ci.id)?.mp ?? null;
         if (mpVal && ci.price < mpVal) {
           const ok = await confirmAsync(
-  "Selling At Loss!",
-  `Item: ${ci.name}\nMP: ${mpVal}\nSP: ${ci.price}\n\nSell anyway?`
-);
-if (!ok) return;
-
+            `Selling ${ci.name} below cost!`,
+            `MP: ${mpVal}\nSP: ${ci.price}\n\nSell anyway?`
+          );
+          if (!ok) return;
         }
       }
 
-      //// 🧠 FIX 4: LIVE STOCK CHECK IN DB BEFORE PROCESSING SALE
-for (const ci of itemsToProcess) {
-  const { data: liveItem, error: fetchErr } = await supabase
-    .from("items")
-    .select("quantity")
-    .eq("id", ci.id)
-    .single();
-    const testFetch = await supabase.from("items").select("id, qty").limit(1);
-    console.log("=== TEST FETCH RESULT ===");
-    console.log("DATA:", testFetch.data);
-    console.log("ERROR:", testFetch.error);
+      // Process offline: addSale (local) and updateItemQty (local)
+      for (const ci of itemsToProcess) {
+        // confirm live local stock (fetch by id)
+        const local = await getItemById(ci.id) as Item;
 
-  // 🟥 Database lookup failed OR item not found
-  if (fetchErr || !liveItem) {
-    
-    alert(
-      `Stock check failed for "${ci.name}".\n` +
-      `Reason: Could not fetch item data from database.`
-    );
-    return;
-  }
-
-  // 🟥 Item exists but has zero or negative quantity
-  if (liveItem.quantity <= 0) {
-    alert(
-      `"${ci.name}" is out of stock.\n` +
-      `Available quantity: 0`
-    );
-    return;
-  }
-
-  // 🟥 Requested quantity is more than what is available
-  if (ci.qty > liveItem.quantity) {
-    alert(
-      `"${ci.name}" does not have enough stock.\n` +
-      `Available: ${liveItem.quantity}\n` +
-      `Requested: ${ci.qty}`
-    );
-    return;
-  }
-
-  // 🟩 Get mp value from local items list
-  const mpVal = items.find((i) => i.id === ci.id)?.mp ?? null;
-
-  // 🟥 Failed to insert sale into "sales" table
-  const { error: saleError } = await supabase.from("sales").insert({
-    name: ci.name,
-    mp: mpVal,
-    sp: ci.price,
-    qty: ci.qty,
-    subtotal: ci.subtotal,
-  });
-
-  if (saleError) {
-    alert(
-      `Could not record sale for "${ci.name}".\n` +
-      `Error: ${saleError.message}`
-    );
-    return;
-  }
-
-  // 🟥 Failed to reduce stock using RPC (decrease_qty)
-  const { error: rpcError } = await supabase.rpc("decrease_qty", {
-    item_id: ci.id,
-    quantity: ci.qty,
-  });
-
-  if (rpcError) {
-    alert(
-      `Stock update failed for "${ci.name}".\n` +
-      `Error: ${rpcError.message}`
-    );
-    return;
-  }
+if (local.quantity <= 0) {
+  alert(`${ci.name} is out of stock!`);
+  return;
 }
 
-// 🟩 If the loop completes, everything succeeded
-setCart([]);
-setModalVisible(false);
-setSelected(null);
-setQty("");
-setSellPrice("");
-alert("Sold Successfully!");
-fetchItems();
-} catch (err: unknown) {
-  let message = "Unknown error";
-  if (err instanceof Error) message = err.message;
+        if (local.quantity <= 0) {
+          alert(`${ci.name} is out of stock!`);
+          return;
+        }
+        if (ci.qty > local.quantity) {
+          alert(`${ci.name} has only ${local.quantity} remaining — cannot sell ${ci.qty}`);
+          return;
+        }
 
-  // 🟥 Any uncaught unexpected error
-  alert(`Checkout failed.\nReason: ${message}`);
-}
-};
+        // record sale locally
+        await addSale(ci.name, local.mp ?? 0, ci.price, ci.qty, ci.subtotal);
 
+        // reduce local stock
+        await updateItemQty(ci.id, ci.qty);
+      }
+
+      // clear cart and refresh local list
+      setCart([]);
+      setModalVisible(false);
+      setSelected(null);
+      setQty("");
+      setSellPrice("");
+      alert("Sold Successfully (offline). Will sync when online.");
+
+      // refresh UI from local DB
+      await fetchItemsLocal();
+
+      // try immediate sync
+      autoSync();
+    } catch (err: unknown) {
+      let message = "Unknown error";
+      if (err instanceof Error) message = err.message;
+      alert(`Checkout failed: ${message}`);
+    }
+  };
 
   const filtered = items.filter((i) =>
     i.name.toLowerCase().includes(search.toLowerCase())
@@ -263,9 +250,8 @@ fetchItems();
       <Text style={styles.name}>{item.name}</Text>
 
       <Text style={styles.prices}>
-  SP: {item.sp}{"\n"}MP: {item.mp}
-</Text>
-
+        SP: {item.sp}{"\n"}MP: {item.mp}
+      </Text>
     </TouchableOpacity>
   );
 
@@ -276,6 +262,7 @@ fetchItems();
         style={styles.search}
         value={search}
         onChangeText={setSearch}
+        
       />
 
       <FlatList
@@ -296,6 +283,7 @@ fetchItems();
               keyboardType="decimal-pad"
               value={qty}
               onChangeText={setQty}
+              placeholderTextColor="#888"
             />
 
             <TextInput
@@ -304,6 +292,7 @@ fetchItems();
               keyboardType="decimal-pad"
               value={sellPrice}
               onChangeText={setSellPrice}
+              placeholderTextColor="#888"
             />
 
             <View style={styles.row}>
@@ -328,7 +317,6 @@ fetchItems();
     </View>
   );
 }
-
 
 /* ---------------- STYLES ---------------- */
 const styles = StyleSheet.create({
@@ -367,26 +355,24 @@ const styles = StyleSheet.create({
   },
 
   name: {
-  fontWeight: "700",
-  marginTop: 10,
-  color: "#1a1a1a",
-  fontSize: 15,
-  textAlign: "center",       // ⭐ center text
-  flexWrap: "wrap",          // ⭐ allow 2 lines
-  width: "100%",
-},
-
+    fontWeight: "700",
+    marginTop: 10,
+    color: "#1a1a1a",
+    fontSize: 15,
+    textAlign: "center", // ⭐ center text
+    flexWrap: "wrap", // ⭐ allow 2 lines
+    width: "100%",
+  },
 
   prices: {
-  fontSize: 13,
-  color: "#d63031",
-  fontWeight: "600",
-  marginTop: 5,
-  textAlign: "center",
-  flexWrap: "wrap",
-  width: "100%",
-},
-
+    fontSize: 13,
+    color: "#d63031",
+    fontWeight: "600",
+    marginTop: 5,
+    textAlign: "center",
+    flexWrap: "wrap",
+    width: "100%",
+  },
 
   modalWrap: {
     flex: 1,

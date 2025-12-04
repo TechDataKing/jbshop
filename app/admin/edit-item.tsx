@@ -1,189 +1,140 @@
+import { getItemById } from "@/app/lib/db/database";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useState } from "react";
 import {
-  ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, TextInput, TouchableOpacity, View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Modal,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { supabase } from "../lib/supabase";
-
-type Item = {
-  id: number;
-  name: string;
-  mp: number;
-  sp: number;
-  quantity: number;
-};
+import {
+  deleteItem,
+  getItems,
+  Item,
+  updateItem,
+} from "../lib/db/database";
 
 export default function AdminInventory() {
+  const { id } = useLocalSearchParams();
+  const itemId = Number(id);
+
+  const [item, setItem] = useState<Item | null>(null);
+
+  /* ------------------- FIXED: LOCAL PARAM + ITEM REFRESH ------------------- */
+  useFocusEffect(
+    useCallback(() => {
+      const refreshItem = async () => {
+        console.log("🔄 Refreshing item data...");
+        const updated = await getItemById(itemId);
+        setItem(updated);
+      };
+      refreshItem(); // Refresh item every time the page is focused
+    }, [itemId])
+  );
+
+  /* ------------------- NORMAL INVENTORY STATE ------------------- */
   const [items, setItems] = useState<Item[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // confirmation modal state
   const [confirmVisible, setConfirmVisible] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<"save" | "delete" | null>(null);
+  const [confirmAction, setConfirmAction] = useState<"save" | "delete" | null>(
+    null
+  );
   const [selectedRow, setSelectedRow] = useState<Partial<Item> | null>(null);
   const [processing, setProcessing] = useState(false);
-  //Database selection
-  const fetchItems = async () => {
+
+  /* ---------------- FETCH FROM SQLITE ONLY ---------------- */
+  const fetchFromSQLite = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("items")
-        .select("*")
-        .order("name", { ascending: true });
-
-      if (error) {
-        console.error("fetchItems error:", error);
-        Alert.alert("Load failed", error.message);
-      } else if (data) {
-        setItems(
-          data.map((r: any) => ({
-            id: r.id,
-            name: r.name,
-            mp: Number(r.mp ?? 0),
-            sp: Number(r.sp ?? 0),
-            quantity: Number(r.quantity ?? r.qty ?? 0),
-          }))
-        );
-      }
+      const data = await getItems();
+      setItems(data);
+      console.log("📥 Loaded items from SQLite:", data.length);
     } catch (e) {
-      console.error("fetchItems exception:", e);
-      Alert.alert("Load failed", String(e));
+      console.error("❌ fetch error:", e);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    fetchItems();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      fetchFromSQLite(); // Re-fetch items every time the page is focused
+    }, [])
+  );
 
-  // open modal for saving a row (row contains latest edited values)
-  const openSaveConfirm = (row: Partial<Item>) => {
-    setSelectedRow(row);
-    setConfirmAction("save");
-    setConfirmVisible(true);
-  };
-
-  // open modal for deleting a row
-  const openDeleteConfirm = (row: Partial<Item>) => {
-    setSelectedRow(row);
-    setConfirmAction("delete");
-    setConfirmVisible(true);
-  };
-
-  // called when user confirms in modal
+  /* ---------------- CONFIRM SAVE OR DELETE ---------------- */
   const onConfirm = async () => {
-    if (!confirmAction || !selectedRow) {
-      setConfirmVisible(false);
-      return;
+    if (!confirmAction || !selectedRow) return;
+
+    const id = selectedRow.id;
+    if (!id) return Alert.alert("Error", "Missing item ID");
+
+    setProcessing(true);
+
+    try {
+      if (confirmAction === "save") {
+        await updateItem({
+          id,
+          name: selectedRow.name!,
+          mp: Number(selectedRow.mp),
+          sp: Number(selectedRow.sp),
+          quantity: Number(selectedRow.quantity),
+          alias: "",
+          unit: "",
+          target: 0,
+        });
+
+        Alert.alert("✔ Saved", "Item updated");
+      }
+
+      if (confirmAction === "delete") {
+        await deleteItem(id);
+        Alert.alert("✔ Deleted", "Item removed");
+      }
+
+      await fetchFromSQLite(); // Refresh item list after update or delete
+    } catch (e) {
+      console.error("❌ onConfirm error:", e);
     }
 
-    if (confirmAction === "save") {
-      // validate
-      const id = selectedRow.id;
-      if (id == null) {
-        Alert.alert("Save error", "Missing item id");
-        setConfirmVisible(false);
-        return;
-      }
-
-      const name = (selectedRow.name ?? "").toString().trim();
-      const mp = Number(selectedRow.mp ?? 0);
-      const sp = Number(selectedRow.sp ?? 0);
-      const quantity = Number(selectedRow.quantity ?? 0);
-
-      if (!name) {
-        Alert.alert("Validation", "Name is required");
-        return;
-      }
-      if (Number.isNaN(mp) || Number.isNaN(sp) || Number.isNaN(quantity)) {
-        Alert.alert("Validation", "MP / SP / Qty must be valid numbers");
-        return;
-      }
-
-      setProcessing(true);
-      try {
-        const { error } = await supabase
-          .from("items")
-          .update({ name, mp, sp, quantity })
-          .eq("id", id);
-
-        if (error) {
-          console.error("save error:", error);
-          Alert.alert("Save failed", error.message);
-        } else {
-          Alert.alert("Saved", `"${name}" updated`);
-          await fetchItems();
-        }
-      } catch (e) {
-        console.error("save exception:", e);
-        Alert.alert("Save failed", String(e));
-      } finally {
-        setProcessing(false);
-        setConfirmVisible(false);
-        setSelectedRow(null);
-        setConfirmAction(null);
-      }
-
-      return;
-    }
-
-    if (confirmAction === "delete") {
-      const id = selectedRow.id;
-      const name = selectedRow.name ?? "";
-      if (id == null) {
-        Alert.alert("Delete error", "Missing item id");
-        setConfirmVisible(false);
-        return;
-      }
-
-      setProcessing(true);
-      try {
-        const { error } = await supabase.from("items").delete().eq("id", id);
-
-        if (error) {
-          console.error("delete error:", error);
-          Alert.alert("Delete failed", error.message);
-        } else {
-          Alert.alert("Deleted", `"${name}" removed`);
-          await fetchItems();
-        }
-      } catch (e) {
-        console.error("delete exception:", e);
-        Alert.alert("Delete failed", String(e));
-      } finally {
-        setProcessing(false);
-        setConfirmVisible(false);
-        setSelectedRow(null);
-        setConfirmAction(null);
-      }
-    }
+    setProcessing(false);
+    setConfirmVisible(false);
+    setConfirmAction(null);
+    setSelectedRow(null);
   };
 
-  // Individual editable row component
+  /* ---------------- ROW COMPONENT ---------------- */
   function Row({ item }: { item: Item }) {
     const [name, setName] = useState(item.name);
     const [mp, setMp] = useState(String(item.mp));
     const [sp, setSp] = useState(String(item.sp));
     const [qty, setQty] = useState(String(item.quantity));
-    const [localSaving, setLocalSaving] = useState(false); // optional per-row spinner while invoking modal
 
-    // open modal and pass current edited values
     const askSave = () => {
-      setLocalSaving(true); // show immediate feedback (optional)
-      openSaveConfirm({
+      setSelectedRow({
         id: item.id,
         name,
         mp: Number(mp),
         sp: Number(sp),
         quantity: Number(qty),
       });
-      setTimeout(() => setLocalSaving(false), 200); // brief
+      setConfirmAction("save");
+      setConfirmVisible(true);
     };
 
     const askDelete = () => {
-      openDeleteConfirm({ id: item.id, name: item.name });
+      setSelectedRow({ id: item.id, name: item.name });
+      setConfirmAction("delete");
+      setConfirmVisible(true);
     };
 
     return (
@@ -192,35 +143,28 @@ export default function AdminInventory() {
           style={[styles.cell, styles.name]}
           value={name}
           onChangeText={setName}
-          placeholder="Name"
         />
-
         <TextInput
           style={styles.cell}
           value={mp}
           onChangeText={setMp}
           keyboardType="decimal-pad"
-          placeholder="MP"
         />
-
         <TextInput
           style={styles.cell}
           value={sp}
           onChangeText={setSp}
           keyboardType="decimal-pad"
-          placeholder="SP"
         />
-
         <TextInput
           style={styles.cell}
           value={qty}
           onChangeText={setQty}
           keyboardType="decimal-pad"
-          placeholder="Qty"
         />
 
         <TouchableOpacity onPress={askSave} style={styles.saveBtn}>
-          {localSaving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveText}>Save</Text>}
+          <Text style={styles.saveText}>Save</Text>
         </TouchableOpacity>
 
         <TouchableOpacity onPress={askDelete} style={styles.deleteBtn}>
@@ -230,45 +174,43 @@ export default function AdminInventory() {
     );
   }
 
-  const filtered = items.filter((i) => i.name.toLowerCase().includes(search.toLowerCase()));
+  /* ---------------- FILTER LIST ---------------- */
+  const filtered = items.filter((i) =>
+    i.name.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
     <View style={styles.container}>
       <TextInput
+      
         placeholder="Search item..."
         style={styles.search}
         value={search}
         onChangeText={setSearch}
+        
+        placeholderTextColor="#ccc"
       />
 
       <View style={styles.header}>
         <Text style={[styles.hcell, styles.hName]}>Name</Text>
-        <Text style={styles.hcell}>Marked Price </Text>
-        <Text style={styles.hcell}>Selling Price</Text>
-        <Text style={styles.hcell}>Quantity</Text>
+        <Text style={styles.hcell}>MP</Text>
+        <Text style={styles.hcell}>SP</Text>
+        <Text style={styles.hcell}>Qty</Text>
       </View>
 
       {loading ? (
-        <View style={{ padding: 20 }}>
-          <ActivityIndicator />
-        </View>
+        <ActivityIndicator style={{ padding: 20 }} />
       ) : (
         <FlatList
           data={filtered}
-          keyExtractor={(i) => String(i.id)}
+          keyExtractor={(item) => `item-${item.id}`}
           renderItem={({ item }) => <Row item={item} />}
-          contentContainerStyle={{ paddingBottom: 120 }}
+          contentContainerStyle={{ paddingBottom: 150 }}
         />
       )}
 
-      {/* Confirmation modal - reliable across platforms */}
-      <Modal visible={confirmVisible} transparent animationType="fade" onRequestClose={() => {
-        if (!processing) {
-          setConfirmVisible(false);
-          setSelectedRow(null);
-          setConfirmAction(null);
-        }
-      }}>
+      {/* Confirm Modal */}
+      <Modal visible={confirmVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>
@@ -277,8 +219,8 @@ export default function AdminInventory() {
 
             <Text style={styles.modalMessage}>
               {confirmAction === "save"
-                ? `Apply changes to "${selectedRow?.name ?? ""}"?`
-                : `Delete "${selectedRow?.name ?? ""}" permanently?`}
+                ? `Apply changes to "${selectedRow?.name}"?`
+                : `Delete "${selectedRow?.name}" permanently?"`}
             </Text>
 
             {processing ? (
@@ -287,21 +229,22 @@ export default function AdminInventory() {
               <View style={styles.modalButtons}>
                 <Pressable
                   style={[styles.modalBtn, styles.modalCancel]}
-                  onPress={() => {
-                    setConfirmVisible(false);
-                    setSelectedRow(null);
-                    setConfirmAction(null);
-                  }}
+                  onPress={() => setConfirmVisible(false)}
                 >
                   <Text style={styles.modalCancelText}>Cancel</Text>
                 </Pressable>
 
                 <Pressable
-                  style={[styles.modalBtn, confirmAction === "delete" ? styles.modalDelete : styles.modalSave]}
+                  style={[
+                    styles.modalBtn,
+                    confirmAction === "delete"
+                      ? styles.modalDelete
+                      : styles.modalSave,
+                  ]}
                   onPress={onConfirm}
                 >
                   <Text style={styles.modalConfirmText}>
-                    {confirmAction === "save" ? "Yes, Save" : "Delete"}
+                    {confirmAction === "save" ? "Save" : "Delete"}
                   </Text>
                 </Pressable>
               </View>
@@ -315,15 +258,14 @@ export default function AdminInventory() {
 
 /* ---------------- STYLES ---------------- */
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0B132B", padding: 10 },
-
+  container: { flex: 1, backgroundColor: "#102dafff", padding: 10 ,paddingTop: 40},
   search: {
-    backgroundColor: "#fff",
+    backgroundColor: "#0c0101ff",
     padding: 12,
     marginBottom: 10,
     borderRadius: 8,
+    color: "#fff",
   },
-
   header: {
     flexDirection: "row",
     backgroundColor: "#1F2A44",
@@ -331,10 +273,13 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: 6,
   },
-
-  hcell: { flex: 1, color: "#fff", fontWeight: "700", textAlign: "center" },
+  hcell: {
+    flex: 1,
+    color: "#fff",
+    fontWeight: "700",
+    textAlign: "center",
+  },
   hName: { flex: 2, textAlign: "left", paddingLeft: 10 },
-
   row: {
     flexDirection: "row",
     backgroundColor: "#fff",
@@ -343,17 +288,14 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: "center",
   },
-
   cell: {
     flex: 1,
     paddingVertical: 6,
     paddingHorizontal: 8,
-    textAlign: "left",
     backgroundColor: "#fff",
+    color: "#000",
   },
-
-  name: { flex: 2, paddingLeft: 6 },
-
+  name: { flex: 2 },
   saveBtn: {
     flex: 1.1,
     backgroundColor: "#2ecc71",
@@ -361,24 +303,18 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginHorizontal: 6,
     alignItems: "center",
-    justifyContent: "center",
   },
-
   deleteBtn: {
     backgroundColor: "#e74c3c",
     paddingVertical: 8,
     paddingHorizontal: 8,
     borderRadius: 8,
     alignItems: "center",
-    justifyContent: "center",
   },
-
-  saveText: { color: "#fff", textAlign: "center", fontWeight: "700" },
-
-  /* Modal styles */
+  saveText: { color: "#fff", fontWeight: "700" },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.45)",
+    backgroundColor: "rgba(0,0,0,0.5)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -389,17 +325,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   modalTitle: { fontSize: 16, fontWeight: "700", marginBottom: 8 },
-  modalMessage: { marginBottom: 14, fontSize: 14 },
+  modalMessage: { fontSize: 14, marginBottom: 14 },
   modalButtons: { flexDirection: "row", justifyContent: "flex-end" },
-  modalBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    marginLeft: 8,
-  },
+  modalBtn: { padding: 10, borderRadius: 8, marginLeft: 8 },
   modalCancel: { backgroundColor: "#e6e6e6" },
   modalCancelText: { color: "#222", fontWeight: "600" },
   modalSave: { backgroundColor: "#3498db" },
-  modalConfirmText: { color: "#fff", fontWeight: "700" },
   modalDelete: { backgroundColor: "#e74c3c" },
+  modalConfirmText: { color: "#fff", fontWeight: "700" },
 });

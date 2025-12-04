@@ -1,5 +1,5 @@
 // manage-stock.tsx
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
@@ -9,7 +9,9 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { supabase } from "../lib/supabase";
+
+import { useFocusEffect } from "expo-router";
+import { getItems, updateItem } from "../lib/db/database";
 
 type Item = {
   id: number;
@@ -32,27 +34,57 @@ export default function ManageStock() {
   const [editingTarget, setEditingTarget] = useState("");
   const [processing, setProcessing] = useState(false);
 
+  // ⬇️ Fetch items
   const fetchItems = async () => {
-    const { data } = await supabase
-      .from("items")
-      .select("id,name,quantity,target")
-      .order("name");
+    console.log("🔄 Fetching items from local DB...");
 
-    setItems(data as Item[]);
+    try {
+      const data = await getItems();
+      console.log("📦 Raw DB Response:", data);
+
+      if (!data || data.length === 0) {
+        console.log("⚠️ No items returned from DB!");
+      }
+
+      // 🔥 FIX: treat target = 0 as "no target"
+      const cleaned = data.map((item) => ({
+        ...item,
+        target: item.target === 0 ? null : item.target,
+      }));
+
+      setItems(cleaned as Item[]);
+    } catch (err) {
+      console.log("❌ ERROR fetching items:", err);
+    }
+
     setLoading(false);
   };
 
+  // ⬇️ Load once when mounted
   useEffect(() => {
     fetchItems();
   }, []);
 
+  // ⬇️ Auto-refresh every time page is opened
+  useFocusEffect(
+    useCallback(() => {
+      console.log("📲 Screen focused — refreshing items");
+      fetchItems();
+    }, [])
+  );
+
   const noTargets = items.filter((i) => i.target == null);
   const outOfStock = items.filter((i) => i.quantity === 0);
   const runningLow = items.filter(
-    (i) => i.target && i.quantity > 0 && i.quantity < i.target * 0.5
+    (i) =>
+      i.target &&
+      i.quantity > 0 &&
+      i.quantity < i.target * 0.5
   );
   const goodStock = items.filter(
-    (i) => i.target && i.quantity >= i.target * 0.5
+    (i) =>
+      i.target &&
+      i.quantity >= i.target * 0.5
   );
 
   const getTabItems = () => {
@@ -78,10 +110,16 @@ export default function ManageStock() {
 
     setProcessing(true);
 
-    await supabase
-      .from("items")
-      .update({ target: parsed })
-      .eq("id", selectedItem.id);
+    await updateItem({
+      id: selectedItem.id,
+      name: selectedItem.name,
+      quantity: selectedItem.quantity,
+      alias: "",
+      mp: 0,
+      sp: 0,
+      unit: "",
+      target: parsed ?? 0,
+    });
 
     await fetchItems();
 
@@ -126,7 +164,6 @@ export default function ManageStock() {
         />
       </View>
 
-      {/* REMOVED horizontal scroll */}
       <ScrollView style={{ maxHeight: 520 }}>
         <Header />
 
@@ -145,7 +182,7 @@ export default function ManageStock() {
             </View>
 
             {/* QUANTITY */}
-            <View style={{ flex: 1 , paddingLeft: 4 }}>
+            <View style={{ flex: 1, paddingLeft: 4 }}>
               <Text>{item.quantity}</Text>
             </View>
 
@@ -174,7 +211,6 @@ export default function ManageStock() {
               )}
             </View>
 
-            {/* SAVE BUTTON (Only no target) */}
             {activeTab === "noTarget" && (
               <TouchableOpacity
                 style={{
@@ -208,7 +244,12 @@ export default function ManageStock() {
           }}
         >
           <View
-            style={{ backgroundColor: "white", padding: 20, borderRadius: 12,width:"60%" }}
+            style={{
+              backgroundColor: "white",
+              padding: 20,
+              borderRadius: 12,
+              width: "60%",
+            }}
           >
             <Text style={{ fontWeight: "700", marginBottom: 10 }}>
               Save new target?
@@ -264,7 +305,11 @@ export default function ManageStock() {
           }}
         >
           <View
-            style={{ backgroundColor: "white", padding: 20, borderRadius: 10 }}
+            style={{
+              backgroundColor: "white",
+              padding: 20,
+              borderRadius: 10,
+            }}
           >
             <Text style={{ fontWeight: "700", marginBottom: 12 }}>
               Target Updated Successfully!
@@ -318,12 +363,11 @@ function Header() {
         <Text style={{ fontWeight: "700", paddingLeft: 2 }}>Name</Text>
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={{ fontWeight: "700", marginLeft:-50}}>Quantity</Text>
+        <Text style={{ fontWeight: "700", marginLeft: -50 }}>Quantity</Text>
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={{ fontWeight: "700",marginLeft:-50 }}>Target</Text>
+        <Text style={{ fontWeight: "700", marginLeft: -50 }}>Target</Text>
       </View>
     </View>
   );
 }
-
